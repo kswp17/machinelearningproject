@@ -1,0 +1,90 @@
+---
+title: "Machine Learning Course Project"
+output: html_document
+date: "2023-12-18"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Classification of Movement Using Raw Accelerometer Data
+
+## Introduction
+
+Our objective is to find a machine learning algorithm that accurately predicts which kind (out of 4 incorrect and 1 correct) of movement type is being performed, based on various raw accelerometer and gyroscope data from on-body band sensors.
+
+## Cleaning/Focusing the Data
+
+```{r}
+##downloading and reading files
+url<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+url2<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+download.file(url, destfile="train.csv")
+train<-read.csv("train.csv")
+download.file(url2, destfile="test.csv")
+test<-read.csv("test.csv")
+```
+
+This data set is challenging because it is missing the calculated features the researchers used for their models, and is a collection of overlapping, shifting windows of time. There is also some multicolinearity in the information (x,y, and z axes for multiple different measurements), though, in the end, I went with a model with no PCA pre-processing because it didn't improve the accuracy very much. Luckily, we don't have to forecast, as the purpose is to classify the movements, not predict which ones are coming next.
+
+I also chose to naively approach the model instead of trying to make my own calculated features, only taking out variables that were repeats or not likely to be important. There are also mismatches between what variables were included in the testing set and what was in the training set, and some variables that were included in the testing set that were fully NA (all the summary columns with standard deviation, mean, etc). Figuring those variables wouldn't be important in the final model---otherwise they would have been given---I took those out. Finally, I also removed from the training set the summary rows ("new_window"=="yes"), since it was redundant information.
+
+```{r}
+##subsetting so train set has all of the same variables as test, without NA columns;removing summary rows and summary variables (avg, std, etc)
+test_small<-test[,colSums(is.na(test))==0]
+same<-intersect(names(test_small), names(train))
+library(dplyr)
+train_small<-train%>%select(all_of(same), 160)%>%rename("outcome"="classe")%>%filter(new_window=="no")
+train_small$outcome<-as.factor(train_small$outcome)
+train_smaller<-train_small%>%select(-X,-cvtd_timestamp,-new_window,-num_window)
+```
+
+## Choosing a Model
+
+Given that our task is classification, I chose the "rpart" method of caret's train function to make a decision tree.
+
+```{r}
+#rpart in caret with tuning and 10x3 fold repeated CV
+library(caret)
+library(dplyr)
+control=trainControl(method="repeatedcv",number=10, repeats=3)
+set.seed(84)
+cvrpart<-train(outcome~.,method = "rpart", data = train_smaller, tuneLength=50,metric="Accuracy",trControl=control)
+```
+
+To train on accuracy as a metric, I set train control to repeated cross-validation (10 x 3), and chose tuneLength = 50 for 50 combinations of parameters tried. Increasing the tune length further didn't result in much increased estimated out-of-set accuracy, so I chose the lowest value that gave me acceptable in- and estimated-out-of-set accuracy.
+
+## In-set Accuracy
+
+To check in-set accuracy, I built a confusion matrix:
+
+```{r}
+insetpreds<-predict(cvrpart, train_smaller)
+confusionMatrix(train_smaller$outcome, insetpreds)
+```
+
+Approximately 96% accurate in-set.
+
+## Estimating Out-of-set Accuracy
+
+```{r}
+print(cvrpart)
+```
+
+The tree was pruned into the optimal model in repeated CV via a complexity parameter of about 0.0012\-\--the smallest value in which the cross-validated error rate is minimized. R estimates a 95.4% accuracy rate out-of-set with a complexity parameter of 0.0012.
+
+```{r}
+plot(cvrpart)
+```
+
+## True Out-of-Set Accuracy
+
+The test set outcomes were predicted using the model and entered into the quiz module to obtain accuracy.
+
+```{r}
+testpreds<-predict(cvrpart, newdata=test_small)
+print(testpreds)
+```
+
+2 predictions were wrong, all others were correct (90% true test set accuracy).
